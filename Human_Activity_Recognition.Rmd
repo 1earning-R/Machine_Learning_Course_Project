@@ -1,0 +1,103 @@
+---
+title: 'Practical Machine Learning: Human Activity Recognition'
+author: "Eric Smith"
+date: "6/22/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(randomForest)
+library(e1071)
+library(parallel)
+library(doParallel)
+```
+
+##OVERVIEW
+
+##DATA
+
+###Getting the Data
+
+```{r Getting Data, cache=TRUE}
+training <- read.csv("data/pml-training.csv", row.names = 1)
+training$classe <- factor(training$classe, levels = c("A","B","C","D","E"))
+```
+
+###Cleaning the Data
+
+```{r Creating Features}
+# LABELS OF WINDOWS USED TO CALCULATE FEATURES
+win_nums <- unique(training$num_window)
+win_max <- max(win_nums)
+# NAMES OF EULER ANGLES
+Eulers <- c("roll_belt", "pitch_belt", "yaw_belt",
+            "roll_arm", "pitch_arm", "yaw_arm",
+            "roll_dumbbell", "pitch_dumbbell", "yaw_dumbbell",
+            "roll_forearm", "pitch_forearm", "yaw_forearm")
+# CREATE MATRIX OF FEATURES
+features <- matrix(rep(0,85 * win_max),
+                   ncol = 85,
+                   nrow = win_max)
+new_names <- rep("",85)
+new_names[1:12] <- paste("max", Eulers, sep = "_")
+new_names[13:24] <- paste("min", Eulers, sep = "_")
+new_names[25:36] <- paste("avg", Eulers, sep = "_")
+new_names[37:48] <- paste("var", Eulers, sep = "_")
+new_names[49:60] <- paste("sdv", Eulers, sep = "_")
+new_names[61:72] <- paste("krt", Eulers, sep = "_")
+new_names[73:84] <- paste("skw", Eulers, sep = "_")
+new_names[85] <- "classe"
+colnames(features) <- new_names
+for (i in win_nums) {
+  training_i <- training[training$num_window == i,]
+  
+  if (length(unique(training_i$classe)) == 1 & 
+      dim(training_i)[1] > 2){
+    
+    maxs <- apply(training_i[,Eulers], 2, max, na.rm = T)
+    mins <- apply(training_i[,Eulers], 2, min, na.rm = T)
+    avgs <- apply(training_i[,Eulers], 2, mean, na.rm = T)
+    vars <- apply(training_i[,Eulers], 2, var, na.rm = T)
+    sdvs <- apply(training_i[,Eulers], 2, sd, na.rm = T)
+    krts <- apply(training_i[,Eulers], 2, kurtosis, na.rm = T)
+    krts[vars == 0] <- 0
+    skws <- apply(training_i[,Eulers], 2, skewness, na.rm = T, type = 1)
+    skws[vars == 0] <- 0
+    features_i <- c(maxs, mins, avgs, vars, sdvs, krts, skws)
+    
+    features[i,1:84] <- features_i
+    features[i,85] <- as.numeric(training_i[1,"classe"])
+    
+  }
+}
+
+features <- data.frame(features)
+features <- features[features$classe != 0, ]
+features$classe <- factor(features$classe, labels = c("A","B","C","D","E"))
+
+```
+
+```{r Folding}
+set.seed(82)
+
+my_model <- train(classe ~ .,
+                  data = features,
+                  method = "rf",
+                  trControl = trainControl(method = "cv",
+                                           number = 10))
+my_model
+```
+
+```{r}
+
+dim(HAR_stats)
+train <- createDataPartition(HAR_stats$classe, p=.6, list = FALSE)
+train_stats <- HAR_stats[train,]
+quiz_stats <- HAR_stats[-train,]
+mdl <- randomForest(classe ~ ., data = train_stats)
+table(train_stats$classe, predict(mdl, train_stats))
+sum(quiz_stats$classe == predict(mdl, quiz_stats)) / dim(quiz_stats)[1]
+names(HAR_stats[,-68])[order(varImp(mdl), decreasing = T)]
+```
