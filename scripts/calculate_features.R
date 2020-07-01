@@ -9,7 +9,7 @@ calculate_features <- function(dataset){
                 "roll_dumbbell", "pitch_dumbbell", "yaw_dumbbell",
                 "roll_forearm", "pitch_forearm", "yaw_forearm")
     
-    # ESTABLISH PARALLEL PROCESSING CLUSTER
+    # ESTABLISH PARALLEL PROCESSING CLUSTER FOR MARGINALLY FASTER COMPUTATION
     ncore <- detectCores() - 1
     c1 <- makePSOCKcluster(ncore)
     registerDoParallel(c1)

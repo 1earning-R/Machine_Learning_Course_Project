@@ -1,8 +1,9 @@
 ---
 title: 'Practical Machine Learning: Human Activity Recognition'
 author: "Eric Smith"
-date: "6/22/2020"
+date: "7/1/2020"
 output: html_document
+bibliography: bibliography.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -12,92 +13,150 @@ library(randomForest)
 library(e1071)
 library(parallel)
 library(doParallel)
+library(foreach)
+library(rattle)
+library(ggplot2)
+source("./scripts/calculate_features.R")
 ```
 
-##OVERVIEW
+### OVERVIEW
 
-##DATA
+In this project, machine learning is used to qualify weight training technique.
+The data were collected by @HAR for similar research.
+Whereas @HAR attempted to show that machine learning could be used to detect mistakes, specify activity, and provide feedback,
+this project focuses primarily on the first topic: detecting mistakes.
 
-###Getting the Data
+Using an "out-of-the-box" random forest method, a model was generated which could identify correct weight lifting technique with greater than 90% sensitivity and specificity.
+
+### DATA
+To collect the data, @HAR instructed four participants in performing a weight training exercise using five techniques labeled *A* through *E*.
+*A* was the correct technique.
+Sensors placed on the participants' belts, arms, forearms, and their dumbbells recorded real-time accelerometer, gyroscope, and magnetometer data.
+For each real-time observation of sensor data, so called "Euler angles" (*roll*, *pitch*, and *yaw*) were calculated.
+Finally, the data were into time windows lasting 0.5 to 2.5 seconds. 
+Minimum, maximum, amplitude, average, variance, standard deviation, kurtosis, and skewness were found for each Euler angle, for each sensor, for each time window.
+These 96 statistical features were used by @HAR in their predictive model.
+
+#### Getting the Data
+
+The data were downloaded from the URLs provided in the project description on Coursera.
 
 ```{r Getting Data, cache=TRUE}
-training <- read.csv("data/pml-training.csv", row.names = 1)
-training$classe <- factor(training$classe, levels = c("A","B","C","D","E"))
+url_trn <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+file_train <- "./data/pml-training.csv"
+if (!file.exists(file_train)) download.file(url_trn, file_train)
+training <- read.csv(file_train, row.names = 1)
+
+url_tst <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+file_test <- "./data/pml_testing.csv"
+if (!file.exists(file_test)) download.file(url_tst, file_test)
+quiz <- read.csv(file_test, row.names = 1)
 ```
 
-###Cleaning the Data
+#### Combining the Data
 
-```{r Creating Features}
-# LABELS OF WINDOWS USED TO CALCULATE FEATURES
-win_nums <- unique(training$num_window)
-win_max <- max(win_nums)
-# NAMES OF EULER ANGLES
-Eulers <- c("roll_belt", "pitch_belt", "yaw_belt",
-            "roll_arm", "pitch_arm", "yaw_arm",
-            "roll_dumbbell", "pitch_dumbbell", "yaw_dumbbell",
-            "roll_forearm", "pitch_forearm", "yaw_forearm")
-# CREATE MATRIX OF FEATURES
-features <- matrix(rep(0,85 * win_max),
-                   ncol = 85,
-                   nrow = win_max)
-new_names <- rep("",85)
-new_names[1:12] <- paste("max", Eulers, sep = "_")
-new_names[13:24] <- paste("min", Eulers, sep = "_")
-new_names[25:36] <- paste("avg", Eulers, sep = "_")
-new_names[37:48] <- paste("var", Eulers, sep = "_")
-new_names[49:60] <- paste("sdv", Eulers, sep = "_")
-new_names[61:72] <- paste("krt", Eulers, sep = "_")
-new_names[73:84] <- paste("skw", Eulers, sep = "_")
-new_names[85] <- "classe"
-colnames(features) <- new_names
-for (i in win_nums) {
-  training_i <- training[training$num_window == i,]
-  
-  if (length(unique(training_i$classe)) == 1 & 
-      dim(training_i)[1] > 2){
-    
-    maxs <- apply(training_i[,Eulers], 2, max, na.rm = T)
-    mins <- apply(training_i[,Eulers], 2, min, na.rm = T)
-    avgs <- apply(training_i[,Eulers], 2, mean, na.rm = T)
-    vars <- apply(training_i[,Eulers], 2, var, na.rm = T)
-    sdvs <- apply(training_i[,Eulers], 2, sd, na.rm = T)
-    krts <- apply(training_i[,Eulers], 2, kurtosis, na.rm = T)
-    krts[vars == 0] <- 0
-    skws <- apply(training_i[,Eulers], 2, skewness, na.rm = T, type = 1)
-    skws[vars == 0] <- 0
-    features_i <- c(maxs, mins, avgs, vars, sdvs, krts, skws)
-    
-    features[i,1:84] <- features_i
-    features[i,85] <- as.numeric(training_i[1,"classe"])
-    
-  }
-}
+The *classe* variable, which denotes the technique used by the participant during data collection, was not provided with the test data set;
+however, it was found by referencing the label of the time window, *num_window*. The provided data sets were then combined into a single data set.
 
-features <- data.frame(features)
-features <- features[features$classe != 0, ]
-features$classe <- factor(features$classe, labels = c("A","B","C","D","E"))
-
+```{r Categorizing Test Data}
+training$classe <- factor(training$classe, 
+                          levels = c("A","B","C","D","E"))
+quiz$classe <- sapply(quiz$num_window,
+                      function(n) training$classe[training$num_window == n][1])
+full_data <- rbind(training, quiz[,intersect(names(quiz),names(training))])
 ```
 
-```{r Folding}
-set.seed(82)
+#### Partitioning the Data
 
-my_model <- train(classe ~ .,
-                  data = features,
-                  method = "rf",
-                  trControl = trainControl(method = "cv",
-                                           number = 10))
-my_model
-```
+The time windows corresponding to the twenty observations in the provided test data set were combined with randomly sampled time windows to create a 40% testing set.
+The remaining 60% of windows were used as the training set.
 
 ```{r}
+set.seed(20707)
 
-dim(HAR_stats)
-train <- createDataPartition(HAR_stats$classe, p=.6, list = FALSE)
-train_stats <- HAR_stats[train,]
-quiz_stats <- HAR_stats[-train,]
-mdl <- randomForest(classe ~ ., data = train_stats)
-table(train_stats$classe, predict(mdl, train_stats))
-sum(quiz_stats$classe == predict(mdl, quiz_stats)) / dim(quiz_stats)[1]
-names(HAR_stats[,-68])[order(varImp(mdl), decreasing = T)]
+windows_data <- unique(full_data$num_window)
+windows_data_noquiz <- windows_data[!(windows_data %in% quiz$num_window)]
+nsample <- round(length(windows_data) * 0.4 - dim(quiz)[1])
+
+windows_tst <- c(sample(windows_data_noquiz, nsample), quiz$num_window)
+windows_trn <- windows_data[!(windows_data %in% windows_tst)]
+
+training <- full_data[full_data$num_window %in% windows_trn,]
+testing <- full_data[full_data$num_window %in% windows_tst,]
+
 ```
+
+#### Cleaning the Data
+
+Many of the features in the provided data contained missing values.
+This was in part due to kurtosis and skewness exploding to infinity for data with zero variance.
+Additionally, attempts to reproduce other features failed.
+To solve this, all features were recalculated.
+Skewness and kurtosis calculations were modified by including two additional values for each Euler angle: one above and one below the mean.
+These modified values were no longer true measures of skewness or kurtosis, but since each window was treated the same way they were still potentially beneficial for training.
+
+This procedure was completed using *calculate_features.R* script, which can be found in *./scripts/*.
+
+```{r}
+features_trn <- calculate_features(training)
+windows_trn_discard <- length(windows_trn) - dim(features_trn)[1]
+features_tst <- calculate_features(testing)
+windows_tst_discard <- length(windows_tst) - dim(features_tst)[1]
+```
+
+Time windows which contained more than a single technique classification (variable *classe*) were discarded. 
+This only resulted in `r windows_trn_discard` windows lost from the training set and `r windows_tst_discard` from the testing set:
+an overall loss of `r round(100 * (windows_tst_discard + windows_trn_discard) / (length(windows_trn) + length(windows_tst)),1)`%
+of windows.
+
+### THE MODEL
+
+A random forest method was used to train the data.
+Random forests are relatively accurate and insensitive to spurious variables.
+A drawback to this approach is loss of parsimony in the model; however,
+the intersection of weight-lifting jocks and mechanical engineers is small and few people would have found the data parsimonious from the get-go.
+
+#### Generating the Model
+
+Ten-fold cross validation was used to train the model. This was utilized using *trainControl()* in the **caret** package.
+
+```{r Generate Model, cache= TRUE}
+set.seed(92549)
+
+ncore <- detectCores() - 1
+c1 <- makePSOCKcluster(ncore)
+registerDoParallel(c1)
+
+model1 <- train(classe ~ .,
+                data = features_trn,
+                method = "rf",
+                trControl = trainControl(method = "cv",
+                                         number = 10,
+                                         allowParallel = T
+                ))
+
+stopCluster(c1)
+```
+
+#### Testing the Model
+
+The function *predict()* from the **stats** package in R was used to predict the classification of technique from the testing features using the random forest model.
+The function *confusionMatrix()* from the **caret** package was used to compare the results to the actual classifications.
+
+```{r}
+mdl_predict <- predict(model1$finalModel, features_tst)
+
+cMat <- confusionMatrix(mdl_predict,features_tst$classe)
+```
+```{r fig.cap="Accuracy Table", echo=FALSE}
+print(cMat$table)
+```
+The above table demonstrates the strength of this model. 
+The overall accuracy was found to be
+`r round(100 * cMat$overall["Accuracy"],1)`%.
+```{r, echo=FALSE}
+cMat$byClass[,1:4]
+```
+Separating the results by class shows that the model can predict correct technique with `r round(100*cMat$byClass[1,1],1)`% accuracy (sensitivity) and incorrect technique with `r round(100*cMat$byClass[1,2],1)`% accuracy (specificity).
+
+### CITATIONS
